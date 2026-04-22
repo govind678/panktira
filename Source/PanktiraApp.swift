@@ -1,0 +1,331 @@
+//
+//  PanktiraApp.swift
+//  Panktira
+//
+
+import SwiftUI
+
+@main
+struct PanktiraApp: App {
+    @State private var appState = AppState()
+
+    init() {
+        // Disable the macOS native window tab bar — we use our own tab system.
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView(appState: appState)
+                .frame(minWidth: 600, minHeight: 400)
+                .onOpenURL { url in
+                    appState.safeLoadFile(at: url)
+                }
+        }
+        .defaultSize(width: 900, height: 600)
+        .commands {
+            // File menu
+            CommandGroup(replacing: .newItem) {
+                Button {
+                    appState.safeNewDocument()
+                } label: {
+                    Label("New", systemImage: "doc.badge.plus")
+                }
+                .keyboardShortcut("n", modifiers: .command)
+
+                Button {
+                    appState.newTab()
+                } label: {
+                    Label("New Tab", systemImage: "plus.square.on.square")
+                }
+                .keyboardShortcut("t", modifiers: .command)
+
+                Button {
+                    appState.safeOpenFile()
+                } label: {
+                    Label("Open…", systemImage: "folder")
+                }
+                .keyboardShortcut("o", modifiers: .command)
+
+                RecentDocumentsMenu()
+
+                Divider()
+
+                Button {
+                    appState.closeActiveTab()
+                } label: {
+                    Label("Close Tab", systemImage: "xmark.square")
+                }
+                .keyboardShortcut("w", modifiers: .command)
+
+                Button {
+                    appState.selectPreviousTab()
+                } label: {
+                    Label("Previous Tab", systemImage: "chevron.left")
+                }
+                .keyboardShortcut("[", modifiers: .command)
+
+                Button {
+                    appState.selectNextTab()
+                } label: {
+                    Label("Next Tab", systemImage: "chevron.right")
+                }
+                .keyboardShortcut("]", modifiers: .command)
+
+                Divider()
+
+                Button {
+                    appState.activeTab.document.save()
+                } label: {
+                    Label("Save", systemImage: "square.and.arrow.down")
+                }
+                .keyboardShortcut("s", modifiers: .command)
+
+                Button {
+                    appState.activeTab.document.saveAs()
+                } label: {
+                    Label("Save As…", systemImage: "square.and.arrow.down.on.square")
+                }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+            }
+
+            // Undo / Redo
+            CommandGroup(replacing: .undoRedo) {
+                Button {
+                    appState.activeTab.document.undo()
+                } label: {
+                    Label("Undo", systemImage: "arrow.uturn.backward")
+                }
+                .keyboardShortcut("z", modifiers: .command)
+                .disabled(!appState.activeTab.document.canUndo)
+
+                Button {
+                    appState.activeTab.document.redo()
+                } label: {
+                    Label("Redo", systemImage: "arrow.uturn.forward")
+                }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(!appState.activeTab.document.canRedo)
+            }
+
+            // Cut / Copy / Paste
+            CommandGroup(replacing: .pasteboard) {
+                Button {
+                    NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil)
+                } label: {
+                    Label("Cut", systemImage: "scissors")
+                }
+                .keyboardShortcut("x", modifiers: .command)
+
+                Button {
+                    NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+                .keyboardShortcut("c", modifiers: .command)
+
+                Button {
+                    NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
+                } label: {
+                    Label("Paste", systemImage: "doc.on.clipboard")
+                }
+                .keyboardShortcut("v", modifiers: .command)
+
+                Button {
+                    NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+                } label: {
+                    Label("Select All", systemImage: "selection.pin.in.out")
+                }
+                .keyboardShortcut("a", modifiers: .command)
+            }
+
+            // Table
+            CommandMenu("Table") {
+                Section("Row") {
+                    Button {
+                        appState.activeTab.insertRowAbove()
+                    } label: {
+                        Label("Insert Row Above", systemImage: "arrow.up.to.line")
+                    }
+                    .keyboardShortcut(KeyEquivalent.upArrow, modifiers: [.command, .option])
+
+                    Button {
+                        appState.activeTab.insertRowBelow()
+                    } label: {
+                        Label("Insert Row Below", systemImage: "arrow.down.to.line")
+                    }
+                    .keyboardShortcut(KeyEquivalent.downArrow, modifiers: [.command, .option])
+
+                    Button {
+                        appState.activeTab.moveRowUp()
+                    } label: {
+                        Label("Move Row Up", systemImage: "arrow.up")
+                    }
+                    .keyboardShortcut(KeyEquivalent.upArrow, modifiers: [.control, .option])
+
+                    Button {
+                        appState.activeTab.moveRowDown()
+                    } label: {
+                        Label("Move Row Down", systemImage: "arrow.down")
+                    }
+                    .keyboardShortcut(KeyEquivalent.downArrow, modifiers: [.control, .option])
+                }
+
+                Divider()
+
+                Section("Column") {
+                    Button {
+                        appState.activeTab.insertColumnBefore()
+                    } label: {
+                        Label("Insert Column Before", systemImage: "arrow.left.to.line")
+                    }
+                    .keyboardShortcut(KeyEquivalent.leftArrow, modifiers: [.command, .option])
+
+                    Button {
+                        appState.activeTab.insertColumnAfter()
+                    } label: {
+                        Label("Insert Column After", systemImage: "arrow.right.to.line")
+                    }
+                    .keyboardShortcut(KeyEquivalent.rightArrow, modifiers: [.command, .option])
+
+                    Button {
+                        appState.activeTab.moveColumnLeft()
+                    } label: {
+                        Label("Move Column Left", systemImage: "arrow.left")
+                    }
+                    .keyboardShortcut(KeyEquivalent.leftArrow, modifiers: [.control, .option])
+
+                    Button {
+                        appState.activeTab.moveColumnRight()
+                    } label: {
+                        Label("Move Column Right", systemImage: "arrow.right")
+                    }
+                    .keyboardShortcut(KeyEquivalent.rightArrow, modifiers: [.control, .option])
+                }
+
+                Divider()
+
+                Section("Delete") {
+                    Button {
+                        appState.activeTab.deleteSelectedRow()
+                    } label: {
+                        Label("Delete Row", systemImage: "minus.circle")
+                    }
+                    .keyboardShortcut(.delete, modifiers: [.command])
+                    .disabled(appState.activeTab.selectedRow == nil || appState.activeTab.selectedRow == -1)
+
+                    Button {
+                        appState.activeTab.deleteSelectedColumn()
+                    } label: {
+                        Label("Delete Column", systemImage: "minus.circle")
+                    }
+                    .keyboardShortcut(.delete, modifiers: [.command, .shift])
+                    .disabled(appState.activeTab.selectedColumn == nil)
+                }
+            }
+
+            // Find & Replace
+            CommandGroup(replacing: .textEditing) {
+                Button {
+                    appState.activeTab.showFind()
+                } label: {
+                    Label("Find & Replace…", systemImage: "magnifyingglass")
+                }
+                .keyboardShortcut("f", modifiers: .command)
+
+                Button {
+                    appState.activeTab.findNext()
+                } label: {
+                    Label("Find Next", systemImage: "chevron.down")
+                }
+                .keyboardShortcut("g", modifiers: .command)
+
+                Button {
+                    appState.activeTab.findPrevious()
+                } label: {
+                    Label("Find Previous", systemImage: "chevron.up")
+                }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button {
+                    appState.activeTab.replaceCurrent()
+                } label: {
+                    Label("Replace", systemImage: "arrow.left.arrow.right")
+                }
+                .disabled(appState.activeTab.searchResults.isEmpty || !appState.activeTab.showFindPanel)
+
+                Button {
+                    appState.activeTab.replaceAll()
+                } label: {
+                    Label("Replace All", systemImage: "arrow.left.arrow.right.square")
+                }
+                .disabled(appState.activeTab.searchResults.isEmpty || !appState.activeTab.showFindPanel)
+            }
+
+            // View — Zoom
+            CommandGroup(replacing: .toolbar) {
+                Button {
+                    appState.activeTab.zoomIn()
+                } label: {
+                    Label("Zoom In", systemImage: "plus.magnifyingglass")
+                }
+                .keyboardShortcut("=", modifiers: .command)
+                .disabled(!appState.activeTab.canZoomIn)
+
+                Button {
+                    appState.activeTab.zoomOut()
+                } label: {
+                    Label("Zoom Out", systemImage: "minus.magnifyingglass")
+                }
+                .keyboardShortcut("-", modifiers: .command)
+                .disabled(!appState.activeTab.canZoomOut)
+
+                Button {
+                    appState.activeTab.resetZoom()
+                } label: {
+                    Label("Actual Size", systemImage: "1.magnifyingglass")
+                }
+                .keyboardShortcut("0", modifiers: .command)
+            }
+
+            // Remove system "Show All Tabs" / "Hide Tab Bar" from View menu
+            CommandGroup(replacing: .windowArrangement) {}
+
+
+        }
+    }
+}
+
+// MARK: - Recent Documents Menu
+
+struct RecentDocumentsMenu: View {
+    var body: some View {
+        Menu {
+            ForEach(recentURLs, id: \.self) { url in
+                Button {
+                    NSDocumentController.shared.openDocument(withContentsOf: url, display: false) { _, _, _ in }
+                } label: {
+                    Label(url.lastPathComponent, systemImage: "doc")
+                }
+            }
+
+            if !recentURLs.isEmpty {
+                Divider()
+            }
+
+            Button {
+                NSDocumentController.shared.clearRecentDocuments(nil)
+            } label: {
+                Label("Clear Menu", systemImage: "trash")
+            }
+        } label: {
+            Label("Open Recent", systemImage: "clock")
+        }
+    }
+
+    private var recentURLs: [URL] {
+        NSDocumentController.shared.recentDocumentURLs
+    }
+}
