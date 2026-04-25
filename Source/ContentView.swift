@@ -161,13 +161,13 @@ private struct TabContentView: View {
                 highlightedCells: tabState.highlightedCells,
                 highlightedRows: tabState.highlightedRows,
                 focusedSearchCell: tabState.focusedSearchCell,
-                selectedRow: Binding(
-                    get: { tabState.selectedRow },
-                    set: { tabState.selectedRow = $0 }
+                selection: Binding(
+                    get: { tabState.selection },
+                    set: { tabState.selection = $0 }
                 ),
-                selectedColumn: Binding(
-                    get: { tabState.selectedColumn },
-                    set: { tabState.selectedColumn = $0 }
+                extraSelections: Binding(
+                    get: { tabState.extraSelections },
+                    set: { tabState.extraSelections = $0 }
                 ),
                 isEditing: Binding(
                     get: { tabState.isEditing },
@@ -182,7 +182,8 @@ private struct TabContentView: View {
                 zoomLevel: tabState.zoomLevel,
                 onCommitEdit: { tabState.commitEdit() },
                 onCancelEdit: { tabState.cancelEdit() },
-                onBeginEditing: { tabState.beginEditing() }
+                onBeginEditing: { tabState.beginEditing() },
+                onToggleCellSelection: { row, col in tabState.toggleCellSelection(row: row, column: col) }
             )
 
             Divider()
@@ -205,7 +206,10 @@ private struct TabContentView: View {
             Text(tabState.selectedCellAddress ?? "—")
                 .font(.system(size: tabState.scaledBodyFontSize, weight: .medium, design: .monospaced))
                 .foregroundStyle(tabState.selectedCellAddress != nil ? .primary : .tertiary)
-                .frame(width: 48, alignment: .center)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(minWidth: 48, alignment: .center)
+                .padding(.horizontal, 6)
                 .padding(.vertical, 3)
                 .background(.background, in: RoundedRectangle(cornerRadius: 4))
                 .overlay(
@@ -227,7 +231,7 @@ private struct TabContentView: View {
                     .onExitCommand {
                         tabState.cancelEdit()
                     }
-            } else if tabState.selectedRow != nil && tabState.selectedColumn != nil {
+            } else if tabState.selection != nil {
                 Text(tabState.selectedCellValue)
                     .font(.system(size: tabState.scaledBodyFontSize))
                     .lineLimit(1)
@@ -324,6 +328,7 @@ private struct WindowCloseInterceptor: NSViewRepresentable {
         func windowShouldClose(_ sender: NSWindow) -> Bool {
             // Check all tabs for unsaved changes
             for tab in appState.tabs {
+                tab.commitEditIfNeeded()
                 guard tab.document.isModified else { continue }
 
                 let alert = NSAlert()
@@ -337,7 +342,7 @@ private struct WindowCloseInterceptor: NSViewRepresentable {
                 let response = alert.runModal()
                 switch response {
                 case .alertFirstButtonReturn:
-                    tab.document.save()
+                    guard tab.document.save() else { return false }
                 case .alertSecondButtonReturn:
                     continue
                 default:
@@ -389,22 +394,40 @@ private struct KeyboardEventHandler: NSViewRepresentable {
                     return event
                 }
 
+                let shiftHeld = event.modifierFlags.contains(.shift)
+
                 switch event.keyCode {
                 case 126: // Up arrow
                     guard !tabState.isEditing else { return event }
-                    tabState.moveSelectionUp()
+                    if shiftHeld {
+                        tabState.extendSelectionUp()
+                    } else {
+                        tabState.moveSelectionUp()
+                    }
                     return nil
                 case 125: // Down arrow
                     guard !tabState.isEditing else { return event }
-                    tabState.moveSelectionDown()
+                    if shiftHeld {
+                        tabState.extendSelectionDown()
+                    } else {
+                        tabState.moveSelectionDown()
+                    }
                     return nil
                 case 123: // Left arrow
                     guard !tabState.isEditing else { return event }
-                    tabState.moveSelectionLeft()
+                    if shiftHeld {
+                        tabState.extendSelectionLeft()
+                    } else {
+                        tabState.moveSelectionLeft()
+                    }
                     return nil
                 case 124: // Right arrow
                     guard !tabState.isEditing else { return event }
-                    tabState.moveSelectionRight()
+                    if shiftHeld {
+                        tabState.extendSelectionRight()
+                    } else {
+                        tabState.moveSelectionRight()
+                    }
                     return nil
                 case 36: // Return
                     if tabState.isEditing {
@@ -416,6 +439,17 @@ private struct KeyboardEventHandler: NSViewRepresentable {
                 case 53: // Escape
                     if tabState.isEditing {
                         tabState.cancelEdit()
+                        return nil
+                    }
+                    // Collapse multi-cell selection to anchor
+                    if let sel = tabState.selection, !sel.isSingleCell {
+                        tabState.extraSelections.removeAll()
+                        tabState.selection = .single(row: sel.anchorRow, column: sel.anchorColumn)
+                        return nil
+                    }
+                    // Clear extra selections if any
+                    if !tabState.extraSelections.isEmpty {
+                        tabState.extraSelections.removeAll()
                         return nil
                     }
                     return event

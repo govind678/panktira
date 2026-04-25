@@ -409,16 +409,16 @@ final class CSVDocument {
         isModified = false
     }
 
-    func openFile(completion: (() -> Void)? = nil) {
+    @discardableResult
+    func openFile() -> Bool {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.commaSeparatedText, .plainText]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.begin { [weak self] response in
-            guard response == .OK, let url = panel.url else { return }
-            self?.loadFile(at: url)
-            completion?()
-        }
+        let response = panel.runModal()
+        guard response == .OK, let url = panel.url else { return false }
+        loadFile(at: url)
+        return true
     }
 
     func loadFile(at url: URL) {
@@ -433,33 +433,36 @@ final class CSVDocument {
         }
     }
 
-    func save() {
+    @discardableResult
+    func save() -> Bool {
         if let url = fileURL {
-            writeToFile(url)
+            return writeToFile(url)
         } else {
-            saveAs()
+            return saveAs()
         }
     }
 
-    func saveAs() {
+    @discardableResult
+    func saveAs() -> Bool {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.nameFieldStringValue = "Untitled.csv"
-        panel.begin { [weak self] response in
-            guard response == .OK, let url = panel.url else { return }
-            self?.writeToFile(url)
-        }
+        let response = panel.runModal()
+        guard response == .OK, let url = panel.url else { return false }
+        return writeToFile(url)
     }
 
-    private func writeToFile(_ url: URL) {
+    @discardableResult
+    private func writeToFile(_ url: URL) -> Bool {
         do {
             let text = toCSV()
             try text.write(to: url, atomically: true, encoding: .utf8)
             fileURL = url
             isModified = false
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
+            return true
         } catch {
-            // Silently fail – could show alert in future
+            return false
         }
     }
 

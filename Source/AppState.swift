@@ -6,6 +6,50 @@
 import SwiftUI
 import AppKit
 
+// MARK: - CellRange
+
+/// A rectangular cell selection defined by anchor and extent corners.
+struct CellRange: Equatable {
+    /// The cell where selection originated (the "active" cell for editing).
+    var anchorRow: Int      // -1 = header
+    var anchorColumn: Int
+
+    /// The cell where selection was extended to.
+    var extentRow: Int      // -1 = header
+    var extentColumn: Int
+
+    /// Normalized bounds (inclusive, always min...max).
+    var minRow: Int { min(anchorRow, extentRow) }
+    var maxRow: Int { max(anchorRow, extentRow) }
+    var minColumn: Int { min(anchorColumn, extentColumn) }
+    var maxColumn: Int { max(anchorColumn, extentColumn) }
+
+    /// Whether this range covers exactly one cell.
+    var isSingleCell: Bool {
+        anchorRow == extentRow && anchorColumn == extentColumn
+    }
+
+    /// Whether a given cell position falls within this range.
+    func contains(row: Int, column: Int) -> Bool {
+        row >= minRow && row <= maxRow && column >= minColumn && column <= maxColumn
+    }
+
+    /// Whether a given row has any cells in the range.
+    func containsRow(_ row: Int) -> Bool {
+        row >= minRow && row <= maxRow
+    }
+
+    /// Whether a given column has any cells in the range.
+    func containsColumn(_ column: Int) -> Bool {
+        column >= minColumn && column <= maxColumn
+    }
+
+    /// Create a single-cell range.
+    static func single(row: Int, column: Int) -> CellRange {
+        CellRange(anchorRow: row, anchorColumn: column, extentRow: row, extentColumn: column)
+    }
+}
+
 // MARK: - TabState
 
 /// Holds all state that is unique to a single tab: its document, selection,
@@ -89,26 +133,148 @@ final class TabState: Identifiable {
 
     // MARK: - Selection
 
-    var selectedRow: Int? = nil
-    var selectedColumn: Int? = nil
+    /// The current cell selection range, or nil if nothing is selected.
+    var selection: CellRange? = nil
 
-    /// Display label for the currently selected cell, e.g. "A1" or "B" (header).
-    var selectedCellAddress: String? {
-        guard let col = selectedColumn else { return nil }
-        let letter = CSVDocument.columnLetter(for: col)
-        guard let row = selectedRow else { return nil }
-        if row == -1 { return letter }
-        return "\(letter)\(row + 1)"
+    /// Additional disjoint cells selected via Cmd+click.
+    var extraSelections: Set<CellPosition> = []
+
+    /// Whether a cell is selected (in the range or in extra selections).
+    func isCellSelected(row: Int, column: Int) -> Bool {
+        if selection?.contains(row: row, column: column) == true { return true }
+        return extraSelections.contains(CellPosition(row: row, column: column))
     }
 
-    /// The current text value of the selected cell (read-only).
-    var selectedCellValue: String {
-        guard let col = selectedColumn else { return "" }
-        guard let row = selectedRow else { return "" }
-        if row == -1 {
-            return document.headerValue(column: col)
+    /// Whether a row has any selected cells.
+    func isRowSelected(_ row: Int) -> Bool {
+        if selection?.containsRow(row) == true { return true }
+        return extraSelections.contains(where: { $0.row == row })
+    }
+
+    /// Whether a column has any selected cells.
+    func isColumnSelected(_ column: Int) -> Bool {
+        if selection?.containsColumn(column) == true { return true }
+        return extraSelections.contains(where: { $0.column == column })
+    }
+
+    /// The anchor row of the current selection (backward-compat shim).
+    var selectedRow: Int? {
+        get { selection?.anchorRow }
+        set {
+            if let newValue {
+                if var sel = selection {
+                    sel.anchorRow = newValue
+                    sel.extentRow = newValue
+                    selection = sel
+                } else {
+                    selection = .single(row: newValue, column: 0)
+                }
+            } else {
+                selection = nil
+            }
         }
-        return document.cellValue(row: row, column: col)
+    }
+
+    /// The anchor column of the current selection (backward-compat shim).
+    var selectedColumn: Int? {
+        get { selection?.anchorColumn }
+        set {
+            if let newValue {
+                if var sel = selection {
+                    sel.anchorColumn = newValue
+                    sel.extentColumn = newValue
+                    selection = sel
+                } else {
+                    selection = .single(row: 0, column: newValue)
+                }
+            } else {
+                selection = nil
+            }
+        }
+    }
+
+    /// Select a single cell, clearing any range and extra selections.
+    func selectCell(row: Int, column: Int) {
+        selection = .single(row: row, column: column)
+        extraSelections.removeAll()
+    }
+
+    /// Toggle a cell in/out of the extra selections (Cmd+click).
+    func toggleCellSelection(row: Int, column: Int) {
+        let pos = CellPosition(row: row, column: column)
+        if extraSelections.contains(pos) {
+            extraSelections.remove(pos)
+            // If we removed the anchor cell, just leave the range as-is
+        } else if selection?.contains(row: row, column: column) == true,
+                  selection?.isSingleCell == true {
+            // Cmd+clicking the only selected cell — deselect it
+            selection = nil
+            extraSelections.removeAll()
+        } else {
+            // If there's a current range, absorb it into extras first time
+            if let sel = selection {
+                // Flatten the current range into extras if not already done
+                if extraSelections.isEmpty && !sel.isSingleCell {
+                    for r in sel.minRow...sel.maxRow {
+                        for c in sel.minColumn...sel.maxColumn {
+                            extraSelections.insert(CellPosition(row: r, column: c))
+                        }
+                    }
+                } else if extraSelections.isEmpty {
+                    extraSelections.insert(CellPosition(row: sel.anchorRow, column: sel.anchorColumn))
+                }
+            }
+            extraSelections.insert(pos)
+            // Move anchor to the newly toggled cell
+            selection = .single(row: row, column: column)
+        }
+    }
+
+    /// Extend the current selection range to include the given cell.
+    func extendSelection(toRow row: Int, toColumn column: Int) {
+        extraSelections.removeAll()
+        if var sel = selection {
+            sel.extentRow = row
+            sel.extentColumn = column
+            selection = sel
+        } else {
+            selection = .single(row: row, column: column)
+        }
+    }
+
+    /// Select all data cells.
+    func selectAll() {
+        guard document.rowCount > 0, document.columnCount > 0 else { return }
+        selection = CellRange(
+            anchorRow: 0,
+            anchorColumn: 0,
+            extentRow: document.rowCount - 1,
+            extentColumn: document.columnCount - 1
+        )
+        extraSelections.removeAll()
+    }
+
+    /// Display label for the currently selected cell, e.g. "A1", "B", or "A1:C3".
+    var selectedCellAddress: String? {
+        guard let sel = selection else { return nil }
+        let anchorLetter = CSVDocument.columnLetter(for: sel.anchorColumn)
+        if sel.anchorRow == -1 && sel.isSingleCell { return anchorLetter }
+        let anchorAddr = sel.anchorRow == -1 ? anchorLetter : "\(anchorLetter)\(sel.anchorRow + 1)"
+
+        if sel.isSingleCell { return anchorAddr }
+
+        let extentLetter = CSVDocument.columnLetter(for: sel.extentColumn)
+        let extentAddr = sel.extentRow == -1 ? extentLetter : "\(extentLetter)\(sel.extentRow + 1)"
+        return "\(anchorAddr):\(extentAddr)"
+    }
+
+    /// The current text value of the anchor cell (read-only).
+    var selectedCellValue: String {
+        guard let sel = selection else { return "" }
+        if sel.anchorRow == -1 {
+            return document.headerValue(column: sel.anchorColumn)
+        }
+        return document.cellValue(row: sel.anchorRow, column: sel.anchorColumn)
     }
 
     // MARK: - Editing
@@ -141,45 +307,89 @@ final class TabState: Identifiable {
         editText = ""
     }
 
+    /// Flush any in-flight cell edit into the document model.
+    /// Safe to call even when not editing (no-op).
+    func commitEditIfNeeded() {
+        guard isEditing else { return }
+        commitEdit()
+    }
+
     // MARK: - Arrow Key Navigation
 
     func moveSelectionUp() {
-        guard let row = selectedRow else { return }
+        guard let sel = selection else { return }
+        extraSelections.removeAll()
+        let row = sel.anchorRow
         if row == -1 { return }
-        if selectedColumn == nil { selectedColumn = 0 }
-        if row == 0 {
-            selectedRow = -1
-        } else {
-            selectedRow = row - 1
-        }
+        let col = sel.anchorColumn
+        let newRow = row == 0 ? -1 : row - 1
+        selection = .single(row: newRow, column: col)
     }
 
     func moveSelectionDown() {
-        guard let row = selectedRow else {
-            selectedRow = 0
-            if selectedColumn == nil { selectedColumn = 0 }
+        extraSelections.removeAll()
+        guard let sel = selection else {
+            selection = .single(row: 0, column: 0)
             return
         }
-        if selectedColumn == nil { selectedColumn = 0 }
+        let row = sel.anchorRow
+        let col = sel.anchorColumn
         if row == -1 {
-            selectedRow = 0
+            selection = .single(row: 0, column: col)
         } else if row < document.rowCount - 1 {
-            selectedRow = row + 1
+            selection = .single(row: row + 1, column: col)
         }
     }
 
     func moveSelectionLeft() {
-        guard let col = selectedColumn else { return }
-        if col > 0 {
-            selectedColumn = col - 1
+        guard let sel = selection else { return }
+        extraSelections.removeAll()
+        if sel.anchorColumn > 0 {
+            selection = .single(row: sel.anchorRow, column: sel.anchorColumn - 1)
         }
     }
 
     func moveSelectionRight() {
-        guard let col = selectedColumn else { return }
-        if col < document.columnCount - 1 {
-            selectedColumn = col + 1
+        guard let sel = selection else { return }
+        extraSelections.removeAll()
+        if sel.anchorColumn < document.columnCount - 1 {
+            selection = .single(row: sel.anchorRow, column: sel.anchorColumn + 1)
         }
+    }
+
+    // MARK: - Shift+Arrow Extend Selection
+
+    func extendSelectionUp() {
+        guard var sel = selection else { return }
+        if sel.extentRow == -1 { return }
+        sel.extentRow = sel.extentRow == 0 ? -1 : sel.extentRow - 1
+        selection = sel
+    }
+
+    func extendSelectionDown() {
+        guard var sel = selection else { return }
+        if sel.extentRow == -1 {
+            sel.extentRow = 0
+        } else if sel.extentRow < document.rowCount - 1 {
+            sel.extentRow += 1
+        }
+        selection = sel
+    }
+
+    func extendSelectionLeft() {
+        guard var sel = selection else { return }
+        if sel.extentColumn > 0 {
+            sel.extentColumn -= 1
+        }
+        selection = sel
+    }
+
+    func extendSelectionRight() {
+        guard var sel = selection else { return }
+        if sel.extentColumn < document.columnCount - 1 {
+            sel.extentColumn += 1
+        }
+        selection = sel
     }
 
     // MARK: - Find & Replace
@@ -258,8 +468,7 @@ final class TabState: Identifiable {
 
     private func selectFocusedCell() {
         guard let cell = focusedSearchCell else { return }
-        selectedRow = cell.row
-        selectedColumn = cell.column
+        selectCell(row: cell.row, column: cell.column)
     }
 
     // MARK: - Replace Actions
@@ -313,12 +522,18 @@ final class TabState: Identifiable {
         }
     }
 
-    func deleteSelectedRow() {
-        guard let row = selectedRow, row >= 0 else { return }
-        document.deleteRow(row)
-        if row >= document.rowCount {
-            selectedRow = document.rowCount - 1
+    func deleteSelectedRows() {
+        guard let sel = selection else { return }
+        let minRow = max(0, sel.minRow)
+        let maxRow = min(sel.maxRow, document.rowCount - 1)
+        guard minRow <= maxRow else { return }
+        // Delete from bottom to top so indices stay valid
+        for row in stride(from: maxRow, through: minRow, by: -1) {
+            guard document.rowCount > 1 else { break }
+            document.deleteRow(row)
         }
+        let newRow = min(minRow, document.rowCount - 1)
+        selection = .single(row: newRow, column: sel.anchorColumn)
     }
 
     // MARK: - Column Operations
@@ -337,47 +552,57 @@ final class TabState: Identifiable {
         document.insertColumnAfter(index)
     }
 
-    func deleteSelectedColumn() {
-        guard let col = selectedColumn else { return }
-        if col >= 0, col < columnWidths.count {
-            columnWidths.remove(at: col)
+    func deleteSelectedColumns() {
+        guard let sel = selection else { return }
+        let minCol = max(0, sel.minColumn)
+        let maxCol = min(sel.maxColumn, document.columnCount - 1)
+        guard minCol <= maxCol else { return }
+        // Delete from right to left so indices stay valid
+        for col in stride(from: maxCol, through: minCol, by: -1) {
+            guard document.columnCount > 1 else { break }
+            if col >= 0, col < columnWidths.count {
+                columnWidths.remove(at: col)
+            }
+            document.deleteColumn(col)
         }
-        document.deleteColumn(col)
-        if col >= document.columnCount {
-            selectedColumn = document.columnCount - 1
-        }
+        let newCol = min(minCol, document.columnCount - 1)
+        selection = .single(row: sel.anchorRow, column: newCol)
     }
 
     // MARK: - Move Operations
 
     func moveRowUp() {
-        guard let row = selectedRow, row >= 0 else { return }
+        guard let sel = selection, sel.anchorRow >= 0 else { return }
+        let row = sel.anchorRow
         document.moveRowUp(row)
-        if row > 0 { selectedRow = row - 1 }
+        if row > 0 { selection = .single(row: row - 1, column: sel.anchorColumn) }
     }
 
     func moveRowDown() {
-        guard let row = selectedRow, row >= 0 else { return }
+        guard let sel = selection, sel.anchorRow >= 0 else { return }
+        let row = sel.anchorRow
         document.moveRowDown(row)
-        if row < document.rowCount - 1 { selectedRow = row + 1 }
+        if row < document.rowCount - 1 { selection = .single(row: row + 1, column: sel.anchorColumn) }
     }
 
     func moveColumnLeft() {
-        guard let col = selectedColumn else { return }
+        guard let sel = selection else { return }
+        let col = sel.anchorColumn
         if col > 0, col < columnWidths.count {
             columnWidths.swapAt(col, col - 1)
         }
         document.moveColumnLeft(col)
-        if col > 0 { selectedColumn = col - 1 }
+        if col > 0 { selection = .single(row: sel.anchorRow, column: col - 1) }
     }
 
     func moveColumnRight() {
-        guard let col = selectedColumn else { return }
+        guard let sel = selection else { return }
+        let col = sel.anchorColumn
         if col >= 0, col < columnWidths.count - 1 {
             columnWidths.swapAt(col, col + 1)
         }
         document.moveColumnRight(col)
-        if col < document.columnCount - 1 { selectedColumn = col + 1 }
+        if col < document.columnCount - 1 { selection = .single(row: sel.anchorRow, column: col + 1) }
     }
 
     // MARK: - Tab Display Name
@@ -434,6 +659,8 @@ final class AppState {
         guard index >= 0, index < tabs.count else { return }
 
         let tab = tabs[index]
+        tab.commitEditIfNeeded()
+
         if tab.document.isModified {
             let alert = NSAlert()
             alert.messageText = "Do you want to save changes to \"\(tab.tabDisplayName)\"?"
@@ -446,7 +673,7 @@ final class AppState {
             let response = alert.runModal()
             switch response {
             case .alertFirstButtonReturn:
-                tab.document.save()
+                guard tab.document.save() else { return }
             case .alertSecondButtonReturn:
                 break // Don't save — proceed
             default:
@@ -504,6 +731,8 @@ final class AppState {
     // MARK: - Unsaved Changes Confirmation
 
     func confirmDiscardingChanges(on tab: TabState, action: @escaping () -> Void) {
+        tab.commitEditIfNeeded()
+
         guard tab.document.isModified else {
             action()
             return
@@ -520,8 +749,9 @@ final class AppState {
         let response = alert.runModal()
         switch response {
         case .alertFirstButtonReturn:
-            tab.document.save()
-            action()
+            if tab.document.save() {
+                action()
+            }
         case .alertSecondButtonReturn:
             action()
         default:
@@ -535,8 +765,8 @@ final class AppState {
         let tab = activeTab
         confirmDiscardingChanges(on: tab) {
             tab.document.newDocument()
-            tab.selectedRow = nil
-            tab.selectedColumn = nil
+            tab.selection = nil
+            tab.extraSelections.removeAll()
             tab.resetColumnWidths()
         }
     }
@@ -544,9 +774,9 @@ final class AppState {
     func safeOpenFile() {
         let tab = activeTab
         confirmDiscardingChanges(on: tab) {
-            tab.document.openFile {
-                tab.selectedRow = nil
-                tab.selectedColumn = nil
+            if tab.document.openFile() {
+                tab.selection = nil
+                tab.extraSelections.removeAll()
                 tab.resetColumnWidths()
             }
         }
@@ -556,8 +786,8 @@ final class AppState {
         let tab = activeTab
         confirmDiscardingChanges(on: tab) {
             tab.document.loadFile(at: url)
-            tab.selectedRow = nil
-            tab.selectedColumn = nil
+            tab.selection = nil
+            tab.extraSelections.removeAll()
             tab.resetColumnWidths()
         }
     }

@@ -8,7 +8,25 @@
 
 /* Begin PBXFileReference section */
 		188D0E552F9028F40062BA16 /* Panktira.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Panktira.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		18DB867F2F996C21000D32B4 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		18DB86802F996D97000D32B4 /* Exceptions for "Supporting Files" folder in "Panktira" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				"Logo/Logo-16.png",
+				"Logo/Logo-32.png",
+				"Logo/Logo-64.png",
+				"Logo/Logo-128.png",
+				"Logo/Logo-256.png",
+				"Logo/Logo-512.png",
+				"Logo/Logo-1024.png",
+				Logo/Logo.ai,
+			);
+			target = 188D0E542F9028F40062BA16 /* Panktira */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		188D0E572F9028F40062BA16 /* Source */ = {
@@ -18,6 +36,9 @@
 		};
 		18DB86072F992838000D32B4 /* Supporting Files */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				18DB86802F996D97000D32B4 /* Exceptions for "Supporting Files" folder in "Panktira" target */,
+			);
 			path = "Supporting Files";
 			sourceTree = "<group>";
 		};
@@ -37,6 +58,7 @@
 		188D0E4C2F9028F40062BA16 = {
 			isa = PBXGroup;
 			children = (
+				18DB867F2F996C21000D32B4 /* README.md */,
 				18DB86072F992838000D32B4 /* Supporting Files */,
 				188D0E572F9028F40062BA16 /* Source */,
 				188D0E562F9028F40062BA16 /* Products */,

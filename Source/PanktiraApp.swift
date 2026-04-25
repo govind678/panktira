@@ -47,7 +47,7 @@ struct PanktiraApp: App {
                 }
                 .keyboardShortcut("o", modifiers: .command)
 
-                RecentDocumentsMenu()
+                RecentDocumentsMenu(appState: appState)
 
                 Divider()
 
@@ -75,6 +75,7 @@ struct PanktiraApp: App {
                 Divider()
 
                 Button {
+                    appState.activeTab.commitEditIfNeeded()
                     appState.activeTab.document.save()
                 } label: {
                     Label("Save", systemImage: "square.and.arrow.down")
@@ -82,6 +83,7 @@ struct PanktiraApp: App {
                 .keyboardShortcut("s", modifiers: .command)
 
                 Button {
+                    appState.activeTab.commitEditIfNeeded()
                     appState.activeTab.document.saveAs()
                 } label: {
                     Label("Save As…", systemImage: "square.and.arrow.down.on.square")
@@ -132,7 +134,12 @@ struct PanktiraApp: App {
                 .keyboardShortcut("v", modifiers: .command)
 
                 Button {
-                    NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+                    if let responder = NSApp.keyWindow?.firstResponder,
+                       responder is NSTextView {
+                        NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+                    } else {
+                        appState.activeTab.selectAll()
+                    }
                 } label: {
                     Label("Select All", systemImage: "selection.pin.in.out")
                 }
@@ -207,20 +214,20 @@ struct PanktiraApp: App {
 
                 Section("Delete") {
                     Button {
-                        appState.activeTab.deleteSelectedRow()
+                        appState.activeTab.deleteSelectedRows()
                     } label: {
-                        Label("Delete Row", systemImage: "minus.circle")
+                        Label("Delete Row(s)", systemImage: "minus.circle")
                     }
                     .keyboardShortcut(.delete, modifiers: [.command])
-                    .disabled(appState.activeTab.selectedRow == nil || appState.activeTab.selectedRow == -1)
+                    .disabled(appState.activeTab.selection == nil || appState.activeTab.selection?.minRow ?? -1 < 0)
 
                     Button {
-                        appState.activeTab.deleteSelectedColumn()
+                        appState.activeTab.deleteSelectedColumns()
                     } label: {
-                        Label("Delete Column", systemImage: "minus.circle")
+                        Label("Delete Column(s)", systemImage: "minus.circle")
                     }
                     .keyboardShortcut(.delete, modifiers: [.command, .shift])
-                    .disabled(appState.activeTab.selectedColumn == nil)
+                    .disabled(appState.activeTab.selection == nil)
                 }
             }
 
@@ -301,11 +308,13 @@ struct PanktiraApp: App {
 // MARK: - Recent Documents Menu
 
 struct RecentDocumentsMenu: View {
+    var appState: AppState
+
     var body: some View {
         Menu {
             ForEach(recentURLs, id: \.self) { url in
                 Button {
-                    NSDocumentController.shared.openDocument(withContentsOf: url, display: false) { _, _, _ in }
+                    appState.safeLoadFile(at: url)
                 } label: {
                     Label(url.lastPathComponent, systemImage: "doc")
                 }

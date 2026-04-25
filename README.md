@@ -23,3 +23,7 @@ A lightweight, native macOS CSV editor built with SwiftUI.
 ## Building
 
 Open `Panktira.xcodeproj` in Xcode and build (Cmd+B).
+
+## TODO
+
+- [ ] Copy/Paste support for selected cells and ranges

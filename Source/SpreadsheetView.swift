@@ -18,8 +18,8 @@ struct SpreadsheetView: View {
     var highlightedCells: Set<CellPosition>
     var highlightedRows: Set<Int>
     var focusedSearchCell: CellPosition?
-    @Binding var selectedRow: Int?
-    @Binding var selectedColumn: Int?
+    @Binding var selection: CellRange?
+    @Binding var extraSelections: Set<CellPosition>
     @Binding var isEditing: Bool
     @Binding var editText: String
     @Binding var columnWidths: [CGFloat]
@@ -31,6 +31,7 @@ struct SpreadsheetView: View {
     var onCommitEdit: () -> Void
     var onCancelEdit: () -> Void
     var onBeginEditing: () -> Void
+    var onToggleCellSelection: (Int, Int) -> Void
 
     /// Tracks in-progress resize for the vertical indicator line.
     @State private var resizingColumn: Int? = nil
@@ -55,10 +56,16 @@ struct SpreadsheetView: View {
         return x
     }
 
+    /// Whether a cell is selected (in range or extras).
+    private func isCellSelected(row: Int, column: Int) -> Bool {
+        if selection?.contains(row: row, column: column) == true { return true }
+        return extraSelections.contains(CellPosition(row: row, column: column))
+    }
+
     /// The cell currently being edited (derived from selection + isEditing).
     private var editingCell: CellPosition? {
-        guard isEditing, let row = selectedRow, let col = selectedColumn else { return nil }
-        return CellPosition(row: row, column: col)
+        guard isEditing, let sel = selection else { return nil }
+        return CellPosition(row: sel.anchorRow, column: sel.anchorColumn)
     }
 
     /// Compute the optimal base width (unscaled) for a column by measuring its content.
@@ -131,7 +138,11 @@ struct SpreadsheetView: View {
                 guard let cell = newValue else { return }
                 // Instantly scroll to the row (no animation) so LazyVStack
                 // materializes it and makes the cell ID available.
-                proxy.scrollTo(cell.row)
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    proxy.scrollTo(cell.row)
+                }
                 // On the next layout pass the cell exists — do a single
                 // smooth animated scroll that covers both axes at once.
                 DispatchQueue.main.async {
@@ -153,7 +164,7 @@ struct SpreadsheetView: View {
                 ForEach(Array(0..<document.columnCount), id: \.self) { colIndex in
                     ColumnLetterCell(
                         index: colIndex,
-                        isSelected: selectedColumn == colIndex,
+                        isSelected: (selection?.containsColumn(colIndex) ?? false) || extraSelections.contains(where: { $0.column == colIndex }),
                         width: widthForColumn(colIndex),
                         height: cellHeight,
                         fontSize: captionFontSize
@@ -185,8 +196,25 @@ struct SpreadsheetView: View {
                     }
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        selectedColumn = colIndex
-                        selectedRow = nil
+                        let shiftHeld = NSEvent.modifierFlags.contains(.shift)
+                        if shiftHeld, let sel = selection {
+                            extraSelections.removeAll()
+                            selection = CellRange(
+                                anchorRow: sel.anchorRow,
+                                anchorColumn: sel.anchorColumn,
+                                extentRow: document.rowCount - 1,
+                                extentColumn: colIndex
+                            )
+                        } else {
+                            // Select entire column
+                            extraSelections.removeAll()
+                            selection = CellRange(
+                                anchorRow: -1,
+                                anchorColumn: colIndex,
+                                extentRow: document.rowCount - 1,
+                                extentColumn: colIndex
+                            )
+                        }
                     }
                 }
             }
@@ -209,7 +237,7 @@ struct SpreadsheetView: View {
         HStack(spacing: 0) {
             RowNumberCell(
                 number: rowIndex + 1,
-                isSelected: selectedRow == rowIndex,
+                isSelected: (selection?.containsRow(rowIndex) ?? false) || extraSelections.contains(where: { $0.row == rowIndex }),
                 isInMatchedRow: highlightedRows.contains(rowIndex),
                 width: rowNumberWidth,
                 height: cellHeight,
@@ -218,8 +246,25 @@ struct SpreadsheetView: View {
             .contentShape(Rectangle())
             .onTapGesture {
                 if isEditing { onCommitEdit() }
-                selectedRow = rowIndex
-                selectedColumn = nil
+                let shiftHeld = NSEvent.modifierFlags.contains(.shift)
+                if shiftHeld, let sel = selection {
+                    extraSelections.removeAll()
+                    selection = CellRange(
+                        anchorRow: sel.anchorRow,
+                        anchorColumn: 0,
+                        extentRow: rowIndex,
+                        extentColumn: document.columnCount - 1
+                    )
+                } else {
+                    // Select entire row
+                    extraSelections.removeAll()
+                    selection = CellRange(
+                        anchorRow: rowIndex,
+                        anchorColumn: 0,
+                        extentRow: rowIndex,
+                        extentColumn: document.columnCount - 1
+                    )
+                }
             }
 
             ForEach(Array(0..<document.columnCount), id: \.self) { colIndex in
@@ -237,12 +282,16 @@ struct SpreadsheetView: View {
         let isFocused = focusedSearchCell == position
         let isCellEditing = editingCell == position
         let value = document.headerValue(column: column)
+        let isSelected = isCellSelected(row: -1, column: column)
+        let isAnchor = selection.map { $0.anchorRow == -1 && $0.anchorColumn == column } ?? false
 
         return ZStack {
             Rectangle()
                 .fill(CellBackgroundResolver.color(
                     isHighlighted: isHighlighted,
-                    isFocused: isFocused
+                    isFocused: isFocused,
+                    isInSelection: isSelected,
+                    isAnchor: isAnchor
                 ))
                 .background(.bar)
 
@@ -262,7 +311,7 @@ struct SpreadsheetView: View {
             }
         }
         .frame(width: widthForColumn(column), height: cellHeight)
-        .border(isFocused ? Color.accentColor : Color.gray.opacity(0.2), width: isFocused ? 2 : 0.5)
+        .border(isFocused ? Color.accentColor : (isAnchor ? Color.accentColor.opacity(0.6) : Color.gray.opacity(0.2)), width: isFocused ? 2 : (isAnchor ? 1.5 : 0.5))
         .overlay {
             if isFocused {
                 Rectangle()
@@ -272,12 +321,30 @@ struct SpreadsheetView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            let wasSelected = selectedRow == -1 && selectedColumn == column
+            let modifiers = NSEvent.modifierFlags
+            let shiftHeld = modifiers.contains(.shift)
+            let cmdHeld = modifiers.contains(.command)
+
             if isEditing { onCommitEdit() }
-            selectedRow = -1
-            selectedColumn = column
-            if wasSelected && !isEditing {
-                onBeginEditing()
+
+            if cmdHeld {
+                onToggleCellSelection(-1, column)
+            } else if shiftHeld, selection != nil {
+                extraSelections.removeAll()
+                selection = CellRange(
+                    anchorRow: selection!.anchorRow,
+                    anchorColumn: selection!.anchorColumn,
+                    extentRow: -1,
+                    extentColumn: column
+                )
+            } else {
+                let wasSelected = selection.map { $0.anchorRow == -1 && $0.anchorColumn == column && $0.isSingleCell } ?? false
+                    && extraSelections.isEmpty
+                extraSelections.removeAll()
+                selection = .single(row: -1, column: column)
+                if wasSelected && !isEditing {
+                    onBeginEditing()
+                }
             }
         }
     }
@@ -289,12 +356,15 @@ struct SpreadsheetView: View {
         let value = document.cellValue(row: row, column: column)
         let colWidth = widthForColumn(column)
 
+        let isSelected = isCellSelected(row: row, column: column)
+        let isAnchor = selection.map { $0.anchorRow == row && $0.anchorColumn == column } ?? false
+
         let visualState = DataCellView.VisualState(
             isHighlighted: highlightedCells.contains(position),
             isFocused: focusedSearchCell == position,
             isInMatchedRow: highlightedRows.contains(row),
-            isRowSelected: selectedRow == row,
-            isColSelected: selectedColumn == column
+            isInSelection: isSelected,
+            isAnchor: isAnchor
         )
 
         return ZStack {
@@ -320,12 +390,30 @@ struct SpreadsheetView: View {
         .frame(width: colWidth, height: cellHeight)
         .contentShape(Rectangle())
         .onTapGesture {
-            let wasSelected = selectedRow == row && selectedColumn == column
+            let modifiers = NSEvent.modifierFlags
+            let shiftHeld = modifiers.contains(.shift)
+            let cmdHeld = modifiers.contains(.command)
+
             if isEditing { onCommitEdit() }
-            selectedRow = row
-            selectedColumn = column
-            if wasSelected && !isEditing {
-                onBeginEditing()
+
+            if cmdHeld {
+                onToggleCellSelection(row, column)
+            } else if shiftHeld, selection != nil {
+                extraSelections.removeAll()
+                selection = CellRange(
+                    anchorRow: selection!.anchorRow,
+                    anchorColumn: selection!.anchorColumn,
+                    extentRow: row,
+                    extentColumn: column
+                )
+            } else {
+                let wasAnchor = selection.map { $0.anchorRow == row && $0.anchorColumn == column && $0.isSingleCell } ?? false
+                    && extraSelections.isEmpty
+                extraSelections.removeAll()
+                selection = .single(row: row, column: column)
+                if wasAnchor && !isEditing {
+                    onBeginEditing()
+                }
             }
         }
     }
@@ -344,27 +432,35 @@ struct DataCellView: View, Equatable {
         let isHighlighted: Bool
         let isFocused: Bool
         let isInMatchedRow: Bool
-        let isRowSelected: Bool
-        let isColSelected: Bool
+        let isInSelection: Bool
+        let isAnchor: Bool
     }
 
     static func == (lhs: DataCellView, rhs: DataCellView) -> Bool {
         lhs.value == rhs.value && lhs.state == rhs.state && lhs.width == rhs.width && lhs.height == rhs.height && lhs.fontSize == rhs.fontSize
     }
 
+    private var borderColor: Color {
+        if state.isFocused { return Color.accentColor }
+        if state.isAnchor { return Color.accentColor.opacity(0.6) }
+        if state.isInSelection { return Color.accentColor.opacity(0.3) }
+        return Color.gray.opacity(0.15)
+    }
+
+    private var borderWidth: CGFloat {
+        if state.isFocused { return 2 }
+        if state.isAnchor { return 1.5 }
+        return 0.5
+    }
+
     var body: some View {
-        let isCellSelected = state.isRowSelected && state.isColSelected
         let bgColor = CellBackgroundResolver.color(
             isHighlighted: state.isHighlighted,
             isFocused: state.isFocused,
             isInMatchedRow: state.isInMatchedRow,
-            isRowSelected: state.isRowSelected,
-            isColSelected: state.isColSelected
+            isInSelection: state.isInSelection,
+            isAnchor: state.isAnchor
         )
-        let borderColor = state.isFocused
-            ? Color.accentColor
-            : (isCellSelected ? Color.accentColor.opacity(0.6) : Color.gray.opacity(0.15))
-        let borderWidth: CGFloat = state.isFocused ? 2 : (isCellSelected ? 1.5 : 0.5)
 
         Rectangle()
             .fill(bgColor)
@@ -522,13 +618,13 @@ enum CellBackgroundResolver {
         isHighlighted: Bool = false,
         isFocused: Bool = false,
         isInMatchedRow: Bool = false,
-        isRowSelected: Bool = false,
-        isColSelected: Bool = false
+        isInSelection: Bool = false,
+        isAnchor: Bool = false
     ) -> Color {
         if isFocused { return Color.accentColor.opacity(0.25) }
         if isHighlighted { return Color.yellow.opacity(0.25) }
-        if isRowSelected && isColSelected { return Color.accentColor.opacity(0.12) }
-        if isRowSelected || isColSelected { return Color.accentColor.opacity(0.05) }
+        if isAnchor { return Color.accentColor.opacity(0.12) }
+        if isInSelection { return Color.accentColor.opacity(0.08) }
         if isInMatchedRow { return Color.yellow.opacity(0.06) }
         return Color.clear
     }
